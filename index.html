@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Blok Puzzle</title>
+<style>
+  :root { --c: min(9.5vw, 46px); --g: 3px; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    margin: 0; min-height: 100vh;
+    font-family: "Segoe UI", Arial, sans-serif; color: #fff;
+    background: linear-gradient(160deg, #1e1b4b, #4c1d95 50%, #be185d);
+    display: flex; flex-direction: column; align-items: center;
+    padding: 16px 8px; user-select: none; overscroll-behavior: none;
+  }
+  h1 { margin: 0 0 10px; font-size: 30px; letter-spacing: 2px; text-shadow: 0 3px 12px rgba(0,0,0,.4); }
+  #skorbox { display: flex; gap: 12px; margin-bottom: 14px; }
+  .kartu {
+    background: rgba(255,255,255,.15); border-radius: 14px;
+    padding: 8px 22px; text-align: center; backdrop-filter: blur(4px);
+  }
+  .kartu small { display: block; font-size: 12px; opacity: .8; letter-spacing: 1px; }
+  .kartu b { font-size: 26px; }
+
+  #papan {
+    display: grid; grid-template-columns: repeat(8, var(--c)); gap: var(--g);
+    padding: 8px; background: rgba(0,0,0,.35); border-radius: 18px;
+    box-shadow: 0 10px 30px rgba(0,0,0,.4);
+  }
+  .sel { width: var(--c); height: var(--c); border-radius: 20%; background: rgba(255,255,255,.08); }
+  .isi, .blok {
+    box-shadow: inset 0 3px 0 rgba(255,255,255,.45), inset 0 -3px 0 rgba(0,0,0,.25);
+  }
+  .prev { background: rgba(255,255,255,.4) !important; }
+  .pecah { animation: pecah .3s forwards; }
+  @keyframes pecah { to { transform: scale(0); opacity: 0; } }
+
+  #tray { display: flex; gap: 10px; margin-top: 20px; }
+  .slot { width: calc(var(--c) * 3); height: calc(var(--c) * 3); display: flex; align-items: center; justify-content: center; }
+  .piece { cursor: grab; touch-action: none; }
+  .blok { border-radius: 20%; }
+  .ghost { position: fixed; z-index: 50; pointer-events: none; filter: drop-shadow(0 8px 10px rgba(0,0,0,.5)); }
+
+  button {
+    margin-top: 14px; padding: 10px 26px; font-size: 16px; font-weight: bold; color: #fff;
+    border: none; border-radius: 999px; cursor: pointer;
+    background: linear-gradient(90deg, #f43f5e, #f97316);
+    box-shadow: 0 6px 16px rgba(0,0,0,.35);
+  }
+  #btnSuara {
+    position: fixed; top: 12px; right: 12px; margin: 0; padding: 8px 12px;
+    font-size: 18px; background: rgba(255,255,255,.2); box-shadow: none; z-index: 40;
+  }
+  #over {
+    position: fixed; inset: 0; display: none; flex-direction: column;
+    align-items: center; justify-content: center; background: rgba(0,0,0,.75); z-index: 100;
+  }
+  #over.tampil { display: flex; }
+  #over h2 { font-size: 40px; margin: 0 0 6px; }
+  #over p { font-size: 20px; margin: 4px 0; }
+
+  /* efek pecahan besar */
+  .pujian {
+    position: fixed; z-index: 60; pointer-events: none; white-space: nowrap;
+    font-weight: 900; text-shadow: 0 4px 14px rgba(0,0,0,.6);
+  }
+  .konfeti { position: fixed; width: 10px; height: 14px; border-radius: 2px; z-index: 60; pointer-events: none; }
+  .kilat { position: fixed; inset: 0; background: #fff; z-index: 70; pointer-events: none; }
+</style>
+</head>
+<body>
+  <button id="btnSuara" onclick="ubahSuara()">🔊</button>
+  <h1>BLOK PUZZLE</h1>
+  <div id="skorbox">
+    <div class="kartu"><small>SKOR</small><b id="skor">0</b></div>
+    <div class="kartu"><small>TERTINGGI</small><b id="best">0</b></div>
+  </div>
+
+  <div id="papan"></div>
+  <div id="tray"></div>
+  <button onclick="mulai()">Main Lagi</button>
+
+  <div id="over">
+    <h2>GAME OVER</h2>
+    <p>Skor kamu: <b id="final">0</b></p>
+    <button onclick="mulai()">Coba Lagi</button>
+  </div>
+
+<script>
+const N = 8;
+const SHAPES = [
+  [[1]],
+  [[1,1]], [[1,1,1]], [[1,1,1,1]],
+  [[1],[1]], [[1],[1],[1]], [[1],[1],[1],[1]],
+  [[1,1],[1,1]],
+  [[1,1,1],[1,1,1],[1,1,1]],
+  [[1,0],[1,1]], [[0,1],[1,1]], [[1,1],[1,0]], [[1,1],[0,1]],
+  [[1,1,1],[0,1,0]],
+  [[0,1,1],[1,1,0]], [[1,1,0],[0,1,1]],
+  [[1,0,0],[1,0,0],[1,1,1]], [[1,1,1],[1,0,0],[1,0,0]]
+];
+const WARNA = ["#f43f5e","#f97316","#facc15","#22c55e","#06b6d4","#3b82f6","#a855f7","#ec4899"];
+
+const boardEl = document.getElementById("papan");
+const trayEl = document.getElementById("tray");
+const skorEl = document.getElementById("skor");
+const bestEl = document.getElementById("best");
+const overEl = document.getElementById("over");
+const finalEl = document.getElementById("final");
+const btnSuara = document.getElementById("btnSuara");
+
+let papan, tray, skor, best, lock, selesai, drag = null;
+const cells = [];
+
+// ---------- PENYIMPANAN (skor tertinggi & suara) ----------
+function bacaBest() {
+  try { return Number(localStorage.getItem("blokpuzzle_best")) || 0; }
+  catch (e) { return 0; }
+}
+function simpanBest() {
+  try { localStorage.setItem("blokpuzzle_best", best); } catch (e) {}
+}
+
+// ---------- SUARA (dibuat dari kode, tanpa file mp3) ----------
+let suaraOn = true;
+try { suaraOn = localStorage.getItem("blokpuzzle_suara") !== "mati"; } catch (e) {}
+btnSuara.textContent = suaraOn ? "🔊" : "🔇";
+let audio = null;
+
+function siapSuara() {
+  if (!audio) {
+    try { audio = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {}
+  }
+  if (audio && audio.state === "suspended") audio.resume();
+}
+
+function ubahSuara() {
+  suaraOn = !suaraOn;
+  btnSuara.textContent = suaraOn ? "🔊" : "🔇";
+  try { localStorage.setItem("blokpuzzle_suara", suaraOn ? "hidup" : "mati"); } catch (e) {}
+  if (suaraOn) siapSuara();
+}
+
+// satu nada: frekuensi, kapan mulai (detik), durasi, jenis gelombang, volume
+function nada(freq, mulai, durasi, tipe, vol) {
+  if (!suaraOn || !audio) return;
+  const t = audio.currentTime + mulai;
+  const o = audio.createOscillator();
+  const g = audio.createGain();
+  o.type = tipe;
+  o.frequency.setValueAtTime(freq, t);
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(vol, t + 0.01);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + durasi);
+  o.connect(g);
+  g.connect(audio.destination);
+  o.start(t);
+  o.stop(t + durasi + 0.05);
+}
+
+const NOTE = [523, 587, 659, 784, 880, 1047, 1175, 1319, 1568];
+
+function suaraPasang() { nada(180, 0, 0.12, "triangle", 0.3); }
+
+function suaraPecah(garis) {
+  const jumlah = garis === 1 ? 3 : garis === 2 ? 5 : garis === 3 ? 7 : 9;
+  const vol = garis === 1 ? 0.12 : 0.18;
+  for (let i = 0; i < jumlah; i++) nada(NOTE[i], i * 0.06, 0.25, "triangle", vol);
+  if (garis >= 3) {
+    // penutup megah untuk pecahan besar
+    const akhir = jumlah * 0.06;
+    nada(130, 0, 0.6, "sawtooth", 0.1);
+    nada(1047, akhir, 0.7, "sine", 0.2);
+    nada(1319, akhir, 0.7, "sine", 0.2);
+    nada(1568, akhir, 0.7, "sine", 0.2);
+  }
+}
+
+function suaraOver() {
+  [392, 330, 262, 196].forEach((f, i) => nada(f, i * 0.2, 0.35, "triangle", 0.22));
+}
+
+// ---------- EFEK VISUAL PECAHAN ----------
+const PUJIAN = { 2: ["DAMN!", "#facc15"], 3: ["MANTAP!", "#22c55e"], 4: ["GILA KAMU!", "#f43f5e"] };
+
+function efekPecah(garis) {
+  if (garis < 2) return; // pecahan sedikit: biasa saja
+  const level = Math.min(garis, 4);
+  const r = boardEl.getBoundingClientRect();
+  const cx = r.left + r.width / 2;
+  const cy = r.top + r.height / 2;
+
+  // tulisan pujian
+  const t = document.createElement("div");
+  t.className = "pujian";
+  t.textContent = PUJIAN[level][0];
+  t.style.color = PUJIAN[level][1];
+  t.style.fontSize = (30 + level * 6) + "px";
+  t.style.left = cx + "px";
+  t.style.top = cy + "px";
+  document.body.appendChild(t);
+  t.animate([
+    { transform: "translate(-50%,-50%) scale(.3)", opacity: 0 },
+    { transform: "translate(-50%,-50%) scale(1.2)", opacity: 1, offset: 0.3 },
+    { transform: "translate(-50%,-110%) scale(1)", opacity: 0 }
+  ], { duration: 1100, easing: "ease-out" }).onfinish = () => t.remove();
+
+  // confetti
+  const jumlah = [0, 0, 18, 40, 80][level];
+  for (let i = 0; i < jumlah; i++) {
+    const p = document.createElement("div");
+    p.className = "konfeti";
+    p.style.background = WARNA[Math.floor(Math.random() * WARNA.length)];
+    p.style.left = cx + "px";
+    p.style.top = cy + "px";
+    document.body.appendChild(p);
+    const sudut = Math.random() * Math.PI * 2;
+    const jarak = 80 + Math.random() * level * 80;
+    const dx = Math.cos(sudut) * jarak;
+    const dy = Math.sin(sudut) * jarak - 40;
+    p.animate([
+      { transform: "translate(0,0) rotate(0deg)", opacity: 1 },
+      { transform: "translate(" + dx + "px," + (dy + 120) + "px) rotate(" + (Math.random() * 720) + "deg)", opacity: 0 }
+    ], { duration: 800 + Math.random() * 600, easing: "cubic-bezier(.1,.7,.3,1)" }).onfinish = () => p.remove();
+  }
+
+  // papan bergetar
+  if (level >= 3) {
+    const k = level === 3 ? 6 : 12;
+    boardEl.animate([
+      { transform: "translate(0,0)" },
+      { transform: "translate(" + k + "px," + (-k) + "px)" },
+      { transform: "translate(" + (-k) + "px," + k + "px)" },
+      { transform: "translate(" + k + "px," + k + "px)" },
+      { transform: "translate(" + (-k) + "px," + (-k) + "px)" },
+      { transform: "translate(0,0)" }
+    ], { duration: 400 });
+  }
+
+  // layar berkilat
+  if (level >= 4) {
+    const f = document.createElement("div");
+    f.className = "kilat";
+    document.body.appendChild(f);
+    f.animate([{ opacity: 0.6 }, { opacity: 0 }], { duration: 450 }).onfinish = () => f.remove();
+  }
+}
+
+// ---------- LOGIKA ----------
+function potonganBaru() {
+  tray = [0, 1, 2].map(() => ({
+    shape: SHAPES[Math.floor(Math.random() * SHAPES.length)],
+    warna: WARNA[Math.floor(Math.random() * WARNA.length)]
+  }));
+}
+
+function muat(shape, r, c) {
+  for (let i = 0; i < shape.length; i++)
+    for (let j = 0; j < shape[i].length; j++) {
+      if (!shape[i][j]) continue;
+      const rr = r + i, cc = c + j;
+      if (rr < 0 || rr >= N || cc < 0 || cc >= N || papan[rr][cc]) return false;
+    }
+  return true;
+}
+
+function adaTempat(shape) {
+  for (let r = 0; r < N; r++)
+    for (let c = 0; c < N; c++)
+      if (muat(shape, r, c)) return true;
+  return false;
+}
+
+function tambahSkor(n) {
+  skor += n;
+  skorEl.textContent = skor;
+  if (skor > best) { best = skor; simpanBest(); }
+  bestEl.textContent = best;
+}
+
+function taruh(idx, r, c) {
+  const p = tray[idx];
+  let jumlah = 0;
+  p.shape.forEach((baris, i) => baris.forEach((v, j) => {
+    if (v) { papan[r + i][c + j] = p.warna; jumlah++; }
+  }));
+  tray[idx] = null;
+  suaraPasang();
+
+  const hapus = new Set();
+  let garis = 0;
+  for (let i = 0; i < N; i++) {
+    if (papan[i].every(x => x)) { garis++; for (let j = 0; j < N; j++) hapus.add(i * N + j); }
+  }
+  for (let j = 0; j < N; j++) {
+    if (papan.every(b => b[j])) { garis++; for (let i = 0; i < N; i++) hapus.add(i * N + j); }
+  }
+  tambahSkor(jumlah + (garis ? garis * garis * 10 : 0));
+
+  if (hapus.size) {
+    lock = true;
+    suaraPecah(garis);
+    efekPecah(garis);
+    gambarPapan(hapus);
+    gambarTray();
+    setTimeout(() => {
+      hapus.forEach(k => { papan[Math.floor(k / N)][k % N] = 0; });
+      lock = false;
+      lanjut();
+    }, 300);
+  } else {
+    lanjut();
+  }
+}
+
+function lanjut() {
+  if (tray.every(t => !t)) potonganBaru();
+  gambarPapan();
+  gambarTray();
+  if (!tray.some(t => t && adaTempat(t.shape))) gameOver();
+}
+
+function gameOver() {
+  selesai = true;
+  suaraOver();
+  finalEl.textContent = skor;
+  overEl.classList.add("tampil");
+}
+
+// ---------- TAMPILAN ----------
+function gambarPapan(hapus) {
+  cells.forEach((el, k) => {
+    const w = papan[Math.floor(k / N)][k % N];
+    el.className = "sel" + (w ? " isi" : "") + (hapus && hapus.has(k) ? " pecah" : "");
+    el.style.background = w || "";
+  });
+}
+
+function bikinEl(shape, warna, ukuran) {
+  const el = document.createElement("div");
+  el.style.display = "grid";
+  el.style.gridTemplateColumns = "repeat(" + shape[0].length + ", " + ukuran + ")";
+  el.style.gridAutoRows = ukuran;
+  el.style.gap = "var(--g)";
+  shape.forEach(baris => baris.forEach(v => {
+    const d = document.createElement("div");
+    if (v) { d.className = "blok"; d.style.background = warna; }
+    el.appendChild(d);
+  }));
+  return el;
+}
+
+function gambarTray() {
+  trayEl.innerHTML = "";
+  tray.forEach((p, i) => {
+    const slot = document.createElement("div");
+    slot.className = "slot";
+    if (p) {
+      const el = bikinEl(p.shape, p.warna, "calc(var(--c) * 0.5)");
+      el.classList.add("piece");
+      el.addEventListener("pointerdown", e => mulaiDrag(e, i, el));
+      slot.appendChild(el);
+    }
+    trayEl.appendChild(slot);
+  });
+}
+
+// ---------- GESER BLOK ----------
+function ukur() {
+  const a = cells[0].getBoundingClientRect();
+  const b = cells[1].getBoundingClientRect();
+  return { x: a.left, y: a.top, step: b.left - a.left };
+}
+
+function bersihPrev() { cells.forEach(el => el.classList.remove("prev")); }
+
+function mulaiDrag(e, i, asal) {
+  if (lock || selesai || !tray[i]) return;
+  e.preventDefault();
+  siapSuara(); // browser baru mengizinkan suara setelah ada sentuhan/klik
+  const p = tray[i];
+  const g = bikinEl(p.shape, p.warna, "var(--c)");
+  g.className = "ghost";
+  document.body.appendChild(g);
+  asal.style.opacity = ".25";
+  drag = { i, g, r: -99, c: -99 };
+  geser(e);
+  window.addEventListener("pointermove", geser);
+  window.addEventListener("pointerup", lepas);
+  window.addEventListener("pointercancel", batal);
+}
+
+function geser(e) {
+  const g = drag.g;
+  const gl = e.clientX - g.offsetWidth / 2;
+  const gt = e.clientY - g.offsetHeight - 50;
+  g.style.left = gl + "px";
+  g.style.top = gt + "px";
+  const m = ukur();
+  drag.c = Math.round((gl - m.x) / m.step);
+  drag.r = Math.round((gt - m.y) / m.step);
+  bersihPrev();
+  const shape = tray[drag.i].shape;
+  if (muat(shape, drag.r, drag.c)) {
+    shape.forEach((baris, i) => baris.forEach((v, j) => {
+      if (v) cells[(drag.r + i) * N + (drag.c + j)].classList.add("prev");
+    }));
+  }
+}
+
+function akhiriDrag() {
+  window.removeEventListener("pointermove", geser);
+  window.removeEventListener("pointerup", lepas);
+  window.removeEventListener("pointercancel", batal);
+  drag.g.remove();
+  bersihPrev();
+  const d = drag;
+  drag = null;
+  return d;
+}
+
+function lepas() {
+  const d = akhiriDrag();
+  if (muat(tray[d.i].shape, d.r, d.c)) taruh(d.i, d.r, d.c);
+  else gambarTray();
+}
+
+function batal() {
+  akhiriDrag();
+  gambarTray();
+}
+
+// ---------- MULAI ----------
+function mulai() {
+  papan = Array.from({ length: N }, () => Array(N).fill(0));
+  skor = 0; selesai = false; lock = false;
+  skorEl.textContent = 0;
+  overEl.classList.remove("tampil");
+  potonganBaru();
+  gambarPapan();
+  gambarTray();
+}
+
+for (let k = 0; k < N * N; k++) {
+  const el = document.createElement("div");
+  el.className = "sel";
+  boardEl.appendChild(el);
+  cells.push(el);
+}
+best = bacaBest();
+bestEl.textContent = best;
+mulai();
+</script>
+</body>
+</html>
